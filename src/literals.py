@@ -82,6 +82,21 @@ SENTINEL_TLS_PORT = 26380
 
 PRIMARY_NAME = "primary"
 QUORUM_NUMBER = 2
+
+# Pebble health checks (K8s only -- the snap has no equivalent).
+VALKEY_HEALTH_CHECK = "valkey-up"
+SENTINEL_HEALTH_CHECK = "sentinel-up"
+# The checks ping as their own ACL user rather than as charmed-operator: an
+# internal user's password can be rotated through the `system-users` secret
+# without a workload restart, which would leave a credential baked into the
+# Pebble plan stale and make the check fail for a reason that is not the
+# workload's health. This user is `nopass` and can only PING, which tells a
+# caller no more than opening the port already does.
+HEALTH_CHECK_USER = "charmed-health-check"
+HEALTH_CHECK_PERMISSIONS = "-@all +ping"
+HEALTH_CHECK_PERIOD = "10s"
+HEALTH_CHECK_TIMEOUT = "3s"
+HEALTH_CHECK_THRESHOLD = 3
 INTERNAL_USERS_PASSWORD_CONFIG = "system-users"
 INTERNAL_USERS_SECRET_LABEL_SUFFIX = "internal_users_secret"
 CLIENTS_USERS_SECRET_LABEL_SUFFIX = "client_users_secret"

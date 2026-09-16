@@ -167,7 +167,11 @@ class ValkeyVmWorkload(WorkloadBase):
             return False
 
     @override
-    def start(self, service: str | None = None, check_alive: bool = True) -> None:
+    def start(
+        self, service: str | None = None, check_alive: bool = True, health_check_host: str = ""
+    ) -> None:
+        # health_check_host is a Pebble concept; snapd has no equivalent, so on
+        # this substrate the charm keeps polling is_healthy itself.
         services = [service] if service else [self.valkey_service, self.sentinel_service]
         try:
             self.valkey.start(services=services)

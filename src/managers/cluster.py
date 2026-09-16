@@ -318,10 +318,10 @@ class ClusterManager(ManagerStatusProtocol):
             if scale_down_status := self._get_scale_down_status():
                 status_list.append(scale_down_status)
 
-            if not self.state.unit_server.model.is_valkey_healthy:
+            if self.state.unit_server.model.valkey_health_check_failed:
                 status_list.append(ClusterStatuses.VALKEY_UNHEALTHY_RESTART.value)
 
-            if not self.state.unit_server.model.is_sentinel_healthy:
+            if self.state.unit_server.model.sentinel_health_check_failed:
                 status_list.append(ClusterStatuses.SENTINEL_UNHEALTHY_RESTART.value)
 
         return status_list or [CharmStatuses.ACTIVE_IDLE.value]

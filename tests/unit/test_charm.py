@@ -10,11 +10,19 @@ from ops import ActiveStatus, pebble, testing
 from common.exceptions import ValkeyServiceNotAliveError, ValkeyWorkloadCommandError
 from src.charm import ValkeyCharm
 from src.literals import (
+    HEALTH_CHECK_PERIOD,
+    HEALTH_CHECK_THRESHOLD,
+    HEALTH_CHECK_TIMEOUT,
+    HEALTH_CHECK_USER,
     INTERNAL_USERS_PASSWORD_CONFIG,
     INTERNAL_USERS_SECRET_LABEL_SUFFIX,
     PEER_RELATION,
     PRIMARY_NAME,
+    SENTINEL_HEALTH_CHECK,
+    SENTINEL_TLS_PORT,
     STATUS_PEERS_RELATION,
+    TLS_PORT,
+    VALKEY_HEALTH_CHECK,
     CharmUsers,
     StartState,
 )
@@ -34,6 +42,27 @@ internal_passwords_secret = testing.Secret(
     owner="app",
     label=f"{PEER_RELATION}.{APP_NAME}.app.{INTERNAL_USERS_SECRET_LABEL_SUFFIX}",
 )
+
+
+def _expected_check(port: int) -> dict:
+    """Build the ping check the K8s workload lays down for one server."""
+    return {
+        "override": "replace",
+        "period": HEALTH_CHECK_PERIOD,
+        "timeout": HEALTH_CHECK_TIMEOUT,
+        "threshold": HEALTH_CHECK_THRESHOLD,
+        "exec": {
+            "command": (
+                f"valkey-cli --no-auth-warning -h valkey-0.valkey-endpoints -p {port} "
+                f"--user {HEALTH_CHECK_USER} --tls "
+                "--cert /var/lib/valkey/tls/client.pem "
+                "--key /var/lib/valkey/tls/client.key "
+                "--cacertdir /var/lib/valkey/tls/ca_certs ping"
+            ),
+            "user": CHARM_USER,
+            "group": CHARM_USER,
+        },
+    }
 
 
 def test_start_primary():
@@ -59,6 +88,7 @@ def test_start_primary():
                 "user": CHARM_USER,
                 "group": CHARM_USER,
                 "startup": "enabled",
+                "on-check-failure": {VALKEY_HEALTH_CHECK: "restart"},
             },
             SERVICE_SENTINEL: {
                 "override": "replace",
@@ -67,6 +97,7 @@ def test_start_primary():
                 "user": CHARM_USER,
                 "group": CHARM_USER,
                 "startup": "enabled",
+                "on-check-failure": {SENTINEL_HEALTH_CHECK: "restart"},
             },
             SERVICE_METRIC_EXPORTER: {
                 "override": "replace",
@@ -76,7 +107,11 @@ def test_start_primary():
                 "group": CHARM_USER,
                 "startup": "enabled",
             },
-        }
+        },
+        "checks": {
+            VALKEY_HEALTH_CHECK: _expected_check(TLS_PORT),
+            SENTINEL_HEALTH_CHECK: _expected_check(SENTINEL_TLS_PORT),
+        },
     }
 
     # generate passwords

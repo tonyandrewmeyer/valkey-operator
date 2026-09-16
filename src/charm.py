@@ -130,11 +130,11 @@ class ValkeyCharm(ops.CharmBase):
             return
 
         if event.restart_valkey and not self.cluster_manager.is_healthy(check_replica_sync=False):
-            self.state.unit_server.update({"is_valkey_healthy": False})
+            self.state.unit_server.update({"valkey_health_check_failed": True})
             restart_lock.release_lock()
             event.defer()
             return
-        self.state.unit_server.update({"is_valkey_healthy": True})
+        self.state.unit_server.update({"valkey_health_check_failed": False})
 
         if event.restart_valkey:
             # CONFIG SET min-replicas-to-write does not survive the restart we
@@ -145,12 +145,12 @@ class ValkeyCharm(ops.CharmBase):
             self.cluster_manager.reconcile_min_replicas_to_write()
 
         if event.restart_sentinel and not self.sentinel_manager.is_healthy():
-            self.state.unit_server.update({"is_sentinel_healthy": False})
+            self.state.unit_server.update({"sentinel_health_check_failed": True})
             restart_lock.release_lock()
             event.defer()
             return
 
-        self.state.unit_server.update({"is_sentinel_healthy": True})
+        self.state.unit_server.update({"sentinel_health_check_failed": False})
         restart_lock.release_lock()
 
 

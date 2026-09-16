@@ -28,9 +28,17 @@ from literals import (
     CHARM,
     CONFIG_FILE,
     DATA_STORAGE_PATH,
+    HEALTH_CHECK_PERIOD,
+    HEALTH_CHECK_THRESHOLD,
+    HEALTH_CHECK_TIMEOUT,
+    HEALTH_CHECK_USER,
     LOG_STORAGE_PATH,
     SENTINEL_ACL_FILE,
     SENTINEL_CONFIG_FILE,
+    SENTINEL_HEALTH_CHECK,
+    SENTINEL_TLS_PORT,
+    TLS_PORT,
+    VALKEY_HEALTH_CHECK,
 )
 
 logger = logging.getLogger(__name__)
@@ -135,29 +143,62 @@ class ValkeyK8sWorkload(WorkloadBase):
     def can_connect(self) -> bool:
         return self.container.can_connect()
 
-    @property
-    def pebble_layer(self) -> pebble.Layer:
-        """Create the Pebble configuration layer for Valkey."""
+    def _ping_check(self, host: str, port: int) -> pebble.CheckDict:
+        """Build an exec check that pings one of the two servers on its TLS port.
+
+        Always the TLS port: ``tls-replication`` is on whatever the client TLS
+        state is, so ``tls-port`` is always listening and the command does not
+        have to be re-rendered when a ``client-certificates`` relation comes or
+        goes. ``-h`` is required because ``valkey.conf`` binds the unit's own
+        address rather than localhost.
+        """
+        command = (
+            f"{self.cli} --no-auth-warning -h {host} -p {port} --user {HEALTH_CHECK_USER} "
+            f"--tls --cert {self.tls_paths.client_cert.as_posix()} "
+            f"--key {self.tls_paths.client_key.as_posix()} "
+            f"--cacertdir {self.tls_paths.ca_certs_dir.as_posix()} ping"
+        )
+        return {
+            "override": "replace",
+            # Deliberately no `level`: a level=alive check hands the restart to
+            # Kubernetes, and Valkey loading a large RDB is exactly the
+            # slow-starting workload the ops how-to says must not have one.
+            "period": HEALTH_CHECK_PERIOD,
+            "timeout": HEALTH_CHECK_TIMEOUT,
+            "threshold": HEALTH_CHECK_THRESHOLD,
+            "exec": {"command": command, "user": self.user, "group": self.user},
+        }
+
+    def build_pebble_layer(self, health_check_host: str = "") -> pebble.Layer:
+        """Create the Pebble configuration layer for Valkey.
+
+        With ``health_check_host`` given, the layer also carries a ping check
+        per server and asks Pebble to restart the server whose check fails.
+        Without it -- the unit has not recorded its own address yet -- the
+        services are laid down unchecked, and the next start adds the checks.
+        """
+        valkey_service: pebble.ServiceDict = {
+            "override": "replace",
+            "summary": "Valkey service",
+            "command": f"valkey-server {self.config_file.as_posix()}",
+            "user": self.user,
+            "group": self.user,
+            "startup": "enabled",
+        }
+        sentinel_service: pebble.ServiceDict = {
+            "override": "replace",
+            "summary": "Valkey sentinel service",
+            "command": f"valkey-sentinel {self.sentinel_config_file.as_posix()}",
+            "user": self.user,
+            "group": self.user,
+            "startup": "enabled",
+        }
         layer_config: pebble.LayerDict = {
             "summary": "Valkey layer",
             "description": "Valkey layer",
             "services": {
-                self.valkey_service: {
-                    "override": "replace",
-                    "summary": "Valkey service",
-                    "command": f"valkey-server {self.config_file.as_posix()}",
-                    "user": self.user,
-                    "group": self.user,
-                    "startup": "enabled",
-                },
-                self.sentinel_service: {
-                    "override": "replace",
-                    "summary": "Valkey sentinel service",
-                    "command": f"valkey-sentinel {self.sentinel_config_file.as_posix()}",
-                    "user": self.user,
-                    "group": self.user,
-                    "startup": "enabled",
-                },
+                self.valkey_service: valkey_service,
+                self.sentinel_service: sentinel_service,
                 self.metric_service: {
                     "override": "replace",
                     "summary": "Valkey metric exporter",
@@ -168,15 +209,28 @@ class ValkeyK8sWorkload(WorkloadBase):
                 },
             },
         }
+
+        if health_check_host:
+            layer_config["checks"] = {
+                VALKEY_HEALTH_CHECK: self._ping_check(health_check_host, TLS_PORT),
+                SENTINEL_HEALTH_CHECK: self._ping_check(health_check_host, SENTINEL_TLS_PORT),
+            }
+            valkey_service["on-check-failure"] = {VALKEY_HEALTH_CHECK: "restart"}
+            sentinel_service["on-check-failure"] = {SENTINEL_HEALTH_CHECK: "restart"}
+
         return pebble.Layer(layer_config)
 
     @override
-    def start(self, service: str | None = None, check_alive: bool = True) -> None:
+    def start(
+        self, service: str | None = None, check_alive: bool = True, health_check_host: str = ""
+    ) -> None:
         try:
             if service:
                 self.container.start(service)
             else:
-                self.container.add_layer(CHARM, self.pebble_layer, combine=True)
+                self.container.add_layer(
+                    CHARM, self.build_pebble_layer(health_check_host), combine=True
+                )
                 self.container.restart(
                     self.valkey_service, self.sentinel_service, self.metric_service
                 )

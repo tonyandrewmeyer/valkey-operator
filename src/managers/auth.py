@@ -20,7 +20,13 @@ from data_platform_helpers.advanced_statuses.types import Scope
 from common.exceptions import ValkeyConfigurationError, ValkeyWorkloadCommandError
 from core.base_workload import WorkloadBase
 from core.cluster_state import ClusterState
-from literals import CHARM_USERS_ROLE_MAP, CharmUsers, StartState
+from literals import (
+    CHARM_USERS_ROLE_MAP,
+    HEALTH_CHECK_PERMISSIONS,
+    HEALTH_CHECK_USER,
+    CharmUsers,
+    StartState,
+)
 from statuses import AuthStatuses, CharmStatuses
 
 logger = logging.getLogger(__name__)
@@ -55,6 +61,9 @@ class AuthManager(ManagerStatusProtocol):
             if "VALKEY_" not in user.name:
                 continue
             acl_content += self._get_internal_user_acl_line(user, passwords=passwords)
+
+        # the Pebble health check's own user
+        acl_content += self._get_health_check_acl_line()
 
         # users for external client relations
         acl_content += self._get_client_user_acl_lines()
@@ -116,6 +125,18 @@ class AuthManager(ManagerStatusProtocol):
         password_hash = hashlib.sha256(password.encode("utf-8")).hexdigest()
         return f"user {user.value} on #{password_hash} {CHARM_USERS_ROLE_MAP[user]}\n"
 
+    def _get_health_check_acl_line(self) -> str:
+        """Generate the ACL line for the user the Pebble health checks ping as.
+
+        Passwordless on purpose: the check command lives in the Pebble plan,
+        which is not re-rendered when `system-users` rotates an internal user's
+        password, so a check authenticating as one of those users would start
+        failing for a reason unrelated to the workload's health -- and with
+        `on-check-failure: restart`, restart Valkey until someone noticed. The
+        user can only PING, which reveals no more than the open port does.
+        """
+        return f"user {HEALTH_CHECK_USER} on nopass {HEALTH_CHECK_PERMISSIONS}\n"
+
     def _get_client_user_acl_lines(self, for_sentinel: bool = False) -> str:
         """Generate the ACL lines for all external client users.
 
@@ -172,7 +193,7 @@ class AuthManager(ManagerStatusProtocol):
         self.state.unit_server.update({"ldap-sync-failed": ""})
 
         # get non-LDAP users to avoid adding duplicate usernames to ACL files
-        internal_users = [user.value for user in CharmUsers]
+        internal_users = [user.value for user in CharmUsers] + [HEALTH_CHECK_USER]
         client_users = []
         if external_client_users := self.state.cluster.external_users_credentials:
             client_users = list(external_client_users.keys())
@@ -270,6 +291,7 @@ class AuthManager(ManagerStatusProtocol):
             if "VALKEY_" in user.name:
                 continue
             acl_content += self._get_internal_user_acl_line(user, passwords=passwords)
+        acl_content += self._get_health_check_acl_line()
         acl_content += self._get_client_user_acl_lines(for_sentinel=True)
         self.workload.write_file(
             acl_content,

@@ -28,14 +28,17 @@ from common.locks import RestartLock, ScaleDownLock, StartLock
 from literals import (
     ARCHIVE_STORAGE,
     CLIENT_PORT,
+    CONTAINER,
     DATA_STORAGE,
     INTERNAL_USERS_PASSWORD_CONFIG,
     INTERNAL_USERS_SECRET_LABEL_SUFFIX,
     LOG_STORAGE,
     PEER_RELATION,
+    SENTINEL_HEALTH_CHECK,
     SENTINEL_PORT,
     SENTINEL_TLS_PORT,
     TLS_PORT,
+    VALKEY_HEALTH_CHECK,
     CharmUsers,
     ScaleDownState,
     StartState,
@@ -80,6 +83,37 @@ class BaseEvents(ops.Object):
             self.framework.observe(
                 self.charm.on[storage_name].storage_detaching, self._on_storage_detaching
             )
+        if self.charm.substrate == Substrate.K8S:
+            # Pebble restarts the failing server itself (on-check-failure);
+            # these only keep the databag's view of unit health current, which
+            # nothing else refreshes between restarts.
+            self.framework.observe(
+                self.charm.on[CONTAINER].pebble_check_failed, self._on_pebble_check_changed
+            )
+            self.framework.observe(
+                self.charm.on[CONTAINER].pebble_check_recovered, self._on_pebble_check_changed
+            )
+
+    def _on_pebble_check_changed(
+        self, event: ops.PebbleCheckFailedEvent | ops.PebbleCheckRecoveredEvent
+    ) -> None:
+        """Record the current status of a health check in the unit databag.
+
+        Both events share a handler and read ``event.info.status`` rather than
+        inferring health from which event arrived: by the time a hook runs the
+        check may have flipped back, and the status this writes drives the
+        unit's reported status until something else changes it.
+        """
+        flags = {
+            VALKEY_HEALTH_CHECK: "valkey_health_check_failed",
+            SENTINEL_HEALTH_CHECK: "sentinel_health_check_failed",
+        }
+        if (field := flags.get(event.info.name)) is None:
+            return
+
+        failed = event.info.status != ops.pebble.CheckStatus.UP
+        logger.info("Health check %s reports %s", event.info.name, event.info.status)
+        self.charm.state.unit_server.update({field: failed})
 
     def _on_storage_attached(self, event: ops.StorageAttachedEvent) -> None:
         """Set ownership/permissions on the attached storage dir."""
@@ -175,7 +209,7 @@ class BaseEvents(ops.Object):
         try:
             self.charm.auth_manager.configure_auth()
             self.charm.config_manager.configure_services(primary_endpoint)
-            self.charm.workload.start()
+            self.charm.workload.start(health_check_host=self.charm.state.endpoint)
         except ValkeyConfigurationError:
             self.charm.state.unit_server.update(
                 {"start_state": StartState.CONFIGURATION_ERROR.value}

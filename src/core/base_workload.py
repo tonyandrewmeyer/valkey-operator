@@ -115,12 +115,18 @@ class WorkloadBase(ABC):
         pass
 
     @abstractmethod
-    def start(self, service: str | None = None, check_alive: bool = True) -> None:
+    def start(
+        self, service: str | None = None, check_alive: bool = True, health_check_host: str = ""
+    ) -> None:
         """Start the workload service(s).
 
         With ``service`` given, start only that single service; otherwise start
         all services. ``check_alive`` verifies they are alive afterwards; pass
         ``False`` to skip the health wait.
+
+        ``health_check_host`` is the address the substrate's own health checks
+        should ping. It is used on K8s, where the services are supervised by
+        Pebble checks, and ignored on VM, where the snap has no equivalent.
 
         Raises:
             ValkeyServicesFailedToStartError: If the service fails to start.

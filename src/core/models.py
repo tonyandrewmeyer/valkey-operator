@@ -343,8 +343,15 @@ class PeerUnitModel(PeerModel):
     tls_ca_rotation: str = Field(default="")
     tls_certificate_expiring: bool = Field(default=False)
     applied_client_cert_fingerprint: str = Field(default="")
-    is_valkey_healthy: bool = Field(default=True)
-    is_sentinel_healthy: bool = Field(default=True)
+    # Negated on purpose. RelationState.update() deletes any key whose value is
+    # falsy, so a default-True flag can never be written False -- the write
+    # removes the key and the next read gets the default back. Every other
+    # boolean here defaults to False for the same reason. The old
+    # `is-valkey-healthy`/`is-sentinel-healthy` keys an earlier revision may
+    # have left in the databag are ignored (extra="ignore"), and only ever held
+    # the value these defaults already imply.
+    valkey_health_check_failed: bool = Field(default=False)
+    sentinel_health_check_failed: bool = Field(default=False)
     client_user_epoch: float = Field(default=0)
     backup_id: str = Field(default="")
     restore_step: str = Field(default="")

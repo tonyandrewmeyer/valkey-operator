@@ -128,6 +128,11 @@ different scopes:
 * `charmed-sentinel-valkey`: the user that Sentinel uses to connect to Valkey
 * `charmed-stats`: the user for monitoring and observability
 
+On Kubernetes there is one further internal user, `charmed-health-check`, which is
+not in that list because it has no password: it is the user the workload's own
+health checks use, it can run only `PING`, and it cannot be given a password
+through the Juju secret below.
+
 It is possible to manage the passwords for all of above's users with a Juju secret, 
 or just for some of them.
 
